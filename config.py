@@ -5,7 +5,6 @@ Import this module wherever you need a setting.
 """
 
 import os
-import torch
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -57,7 +56,11 @@ TASTE_TWINS             = os.path.join(EMBEDDINGS_DIR, "taste_twins.pkl")
 # ---------------------------------------------------------------------------
 # Device
 # ---------------------------------------------------------------------------
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+try:
+    import torch
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+except ImportError:
+    DEVICE = "cpu"
 
 # ---------------------------------------------------------------------------
 # Text / Vocabulary
