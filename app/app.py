@@ -37,10 +37,9 @@ class NCFModel(nn.Module):
         return self.net(torch.cat([u, m], dim=1))
 
 
-# ── Load all artifacts once and cache ────────────────────────────
-@st.cache_resource(show_spinner="Loading VibeRec artifacts…")
+# ── Core artifacts (needed for movie-based mode) ─────────────────
+@st.cache_resource(show_spinner="Loading VibeRec…")
 def load_artifacts():
-    # Movie embeddings
     movie_emb = np.load(cfg.MOVIE_VIBE_EMBEDDINGS).astype("float32")
     with open(cfg.MOVIE_ID_TO_IDX, "rb") as f:
         m2i = pickle.load(f)
@@ -51,12 +50,6 @@ def load_artifacts():
 
     faiss_movie = faiss.read_index(cfg.FAISS_MOVIE_INDEX)
 
-    # User profiles
-    user_emb = np.load(cfg.USER_TASTE_PROFILES).astype("float32")
-    with open(cfg.USER_ID_TO_IDX, "rb") as f:
-        u2i = pickle.load(f)
-
-    # Novelty scores
     with open(cfg.NOVELTY_SCORES, "rb") as f:
         nov_raw = pickle.load(f)
     nov_arr = np.array(
@@ -64,7 +57,6 @@ def load_artifacts():
         dtype="float32",
     )
 
-    # NCF model
     ncf = NCFModel(
         input_dim=cfg.VIBE_EMBED_DIM * 2,
         hidden=cfg.NCF_HIDDEN,
@@ -74,13 +66,11 @@ def load_artifacts():
     ncf.load_state_dict(torch.load(cfg.NCF_CKPT, map_location="cpu"))
     ncf.eval()
 
-    # UMAP metadata
     umap_meta_path = os.path.join(cfg.EMBEDDINGS_DIR, "umap_movie_meta.pkl")
     with open(umap_meta_path, "rb") as f:
         umap_meta_list = pickle.load(f)
     umap_df = pd.DataFrame(umap_meta_list)
 
-    # Movie metadata
     meta = pd.read_csv(cfg.MOVIES_MASTER)
 
     return {
@@ -89,13 +79,20 @@ def load_artifacts():
         "m2i": m2i,
         "i2m": i2m,
         "faiss_movie": faiss_movie,
-        "user_emb": user_emb,
-        "u2i": u2i,
         "nov_arr": nov_arr,
         "ncf": ncf,
         "umap_df": umap_df,
         "meta": meta,
     }
+
+
+# ── User profiles — lazy-loaded only when user-based mode is used ─
+@st.cache_resource(show_spinner="Loading user profiles…")
+def load_user_artifacts():
+    user_emb = np.load(cfg.USER_TASTE_PROFILES).astype("float32")
+    with open(cfg.USER_ID_TO_IDX, "rb") as f:
+        u2i = pickle.load(f)
+    return {"user_emb": user_emb, "u2i": u2i}
 
 
 # ── Backend functions ─────────────────────────────────────────────
@@ -155,24 +152,24 @@ def get_recommendations(
 
 
 def get_user_recommendations(
-    user_id: int, alpha: float, arts: dict, top_k: int = 10
+    user_id: int, alpha: float, arts: dict, user_arts: dict, top_k: int = 10
 ) -> pd.DataFrame:
     """
     User-personalised recommendations.
     final  = alpha * vibe_sim + (1-alpha) * novelty
     blended = 0.5 * ncf_score + 0.5 * final
     """
-    if user_id not in arts["u2i"]:
+    if user_id not in user_arts["u2i"]:
         return pd.DataFrame()
 
-    u_idx = arts["u2i"][user_id]
-    taste = arts["user_emb"][u_idx : u_idx + 1].copy().astype("float32")
+    u_idx = user_arts["u2i"][user_id]
+    taste = user_arts["user_emb"][u_idx : u_idx + 1].copy().astype("float32")
     faiss.normalize_L2(taste)
     vibe_sims = (arts["vecs_n"] @ taste.T).squeeze(1)
 
     # NCF in batches
     u_vec = torch.tensor(
-        np.tile(arts["user_emb"][u_idx], (len(arts["m2i"]), 1)), dtype=torch.float32
+        np.tile(user_arts["user_emb"][u_idx], (len(arts["m2i"]), 1)), dtype=torch.float32
     )
     m_vec = torch.tensor(arts["movie_emb"], dtype=torch.float32)
     ncf_parts = []
@@ -365,10 +362,12 @@ if mode == "Movie-based":
 
 # ── User-based mode ───────────────────────────────────────────────
 else:
+    user_arts = load_user_artifacts()
+
     user_input = st.text_input(
         "Enter user ID",
         placeholder="e.g. 12345",
-        help=f"Valid range: any user in the MovieLens 25M dataset ({len(arts['u2i']):,} users)",
+        help=f"Valid range: any user in the MovieLens 25M dataset ({len(user_arts['u2i']):,} users)",
     )
     user_btn = st.button("Get recommendations", type="primary")
 
@@ -380,14 +379,14 @@ else:
             uid = None
 
         if uid is not None:
-            if uid not in arts["u2i"]:
+            if uid not in user_arts["u2i"]:
                 st.error(
                     f"User {uid} not found in taste profiles. "
                     "Try a user with at least 10 ratings in the dataset."
                 )
             else:
                 with st.spinner("Running NCF + vibe blend…"):
-                    recs = get_user_recommendations(uid, alpha, arts, top_k=top_k)
+                    recs = get_user_recommendations(uid, alpha, arts, user_arts, top_k=top_k)
 
                 if recs.empty:
                     st.error("No recommendations returned.")
