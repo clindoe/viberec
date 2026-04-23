@@ -1,7 +1,19 @@
-# Large data / model artifacts — not tracked in git
-data/
-embeddings/
-models/
+# Raw + processed data (too large)
+data/raw/
+data/processed/ratings_train.csv
+data/processed/ratings_test.csv
+data/processed/plot_sequences.npy
+data/processed/review_sequences.npy
+data/processed/embedding_matrix.npy
+data/processed/word2idx.pkl
+data/processed/metadata_features.npy
+
+# Large model — not needed at runtime (embeddings are pre-computed)
+models/vibe_encoder_best.pt
+
+# Large embedding files not used by the app
+embeddings/faiss_user.index
+embeddings/taste_twins.pkl
 
 # Python
 __pycache__/
